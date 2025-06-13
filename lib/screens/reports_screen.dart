@@ -1,402 +1,644 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'package:intl/intl.dart';
 import 'package:logger/logger.dart';
-
-// Typedef to avoid exposing private state class
-typedef ReportsScreenState = State<ReportsScreen>;
+import 'package:intl/intl.dart';
 
 class ReportsScreen extends StatefulWidget {
   final List<List<dynamic>> csvData;
 
-  const ReportsScreen(this.csvData, {Key? key}) : super(key: key);
+  const ReportsScreen(this.csvData, {super.key});
 
   @override
-  ReportsScreenState createState() => _ReportsScreenState();
+  State<ReportsScreen> createState() => _ReportsScreenState();
 }
 
 class _ReportsScreenState extends State<ReportsScreen> {
   final Logger _logger = Logger();
-  String _resolution = 'Hourly';
-  final List<FlSpot> _tapDurationSpots = [];
-  final List<FlSpot> _batteryVoltageSpots = [];
-  final List<FlSpot> _waterFlowSpots = [];
-  int? _firstTimestamp;
+  String _selectedResolution = 'Hourly';
+  DateTime _selectedDate = DateTime.now();
+  String _selectedHourlyView = 'Full Day'; // New state for Hourly view
+  final List<String> _resolutions = ['Hourly', 'Daily', 'Weekly', 'Monthly', 'Yearly'];
+  final List<String> _hourlyViews = [
+    'Full Day',
+    '00:00–03:00',
+    '03:00–06:00',
+    '06:00–09:00',
+    '09:00–12:00',
+    '12:00–15:00',
+    '15:00–18:00',
+    '18:00–21:00',
+    '21:00–24:00',
+  ];
 
   @override
   void initState() {
     super.initState();
-    _updateData();
+    _logger.i('ReportsScreen initialized with ${widget.csvData.length} data rows');
   }
 
-  Future<void> _updateData() async {
-    _logger.i('Updating data for resolution: $_resolution, csvData length: ${widget.csvData.length}');
-
-    if (widget.csvData.isEmpty) {
-      _logger.w('No data available in csvData');
+  Future<void> _selectDate() async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null && picked != _selectedDate) {
       setState(() {
-        _tapDurationSpots.clear();
-        _batteryVoltageSpots.clear();
-        _waterFlowSpots.clear();
-        _firstTimestamp = null;
+        _selectedDate = picked;
       });
-      return;
+      _logger.i('Selected date: ${_selectedDate.toString().substring(0, 10)}');
     }
+  }
 
-    // Process data in isolate
-    final result = await compute(_processCsvData, {
-      'csvData': widget.csvData,
-      'resolution': _resolution,
-    });
-
+  void _previousDay() {
     setState(() {
-      _tapDurationSpots.clear();
-      _tapDurationSpots.addAll(result['tapDurationSpots']);
-      _batteryVoltageSpots.clear();
-      _batteryVoltageSpots.addAll(result['batteryVoltageSpots']);
-      _waterFlowSpots.clear();
-      _waterFlowSpots.addAll(result['waterFlowSpots']);
-      _firstTimestamp = result['firstTimestamp'];
+      _selectedDate = _selectedDate.subtract(const Duration(days: 1));
     });
+    _logger.i('Navigated to previous day: ${_selectedDate.toString().substring(0, 10)}');
+  }
 
-    if (_tapDurationSpots.isEmpty) {
-      _logger.w('No FlSpots generated; charts will be empty');
-    } else if (_tapDurationSpots.every((spot) => spot.y == 0)) {
-      _logger.w('All tap durations are 0.0; check data source (code.py or CSV)');
-    }
-    if (_waterFlowSpots.every((spot) => spot.y == 0)) {
-      _logger.w('All water flow rates are 0.0; check data source (code.py or CSV)');
+  void _nextDay() {
+    final now = DateTime.now();
+    final nextDay = _selectedDate.add(const Duration(days: 1));
+    if (nextDay.isBefore(now) || nextDay.isAtSameMomentAs(now)) {
+      setState(() {
+        _selectedDate = nextDay;
+      });
+      _logger.i('Navigated to next day: ${_selectedDate.toString().substring(0, 10)}');
     }
   }
 
-  // Static method for isolate processing
-  static Map<String, dynamic> _processCsvData(Map<String, dynamic> input) {
-    final Logger logger = Logger();
-    final List<List<dynamic>> csvData = input['csvData'];
-    final String resolution = input['resolution'];
+  List<Map<String, dynamic>> _processHourlyData() {
+    final startOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+    //final endOfDay = startOfDay.add(const Duration(days: 1));
+    final startTimestamp = startOfDay.millisecondsSinceEpoch ~/ 1000;
+    //final endTimestamp = endOfDay.millisecondsSinceEpoch ~/ 1000;
 
-    Map<String, double> tapDurationSums = {};
-    Map<String, double> batteryVoltages = {};
-    Map<String, double> waterFlowSums = {};
-    int? firstTimestamp;
-    bool hasNonZeroTapDuration = false;
-    bool hasNonZeroWaterFlow = false;
+    // Determine the time window for Hourly view
+    int windowStartHour = 0;
+    int windowEndHour = 24;
+    if (_selectedHourlyView != 'Full Day') {
+      final startHour = int.parse(_selectedHourlyView.split('–')[0].split(':')[0]);
+      windowStartHour = startHour;
+      windowEndHour = startHour + 3;
+    }
 
-    // Filter data for the last 7 days for Daily resolution
-    List<List<dynamic>> processedData;
-    if (resolution == 'Daily') {
-      if (csvData.isNotEmpty) {
-        int maxTimestamp = csvData.map((row) => row[0] as int).reduce((a, b) => a > b ? a : b);
-        int cutoffTimestamp = maxTimestamp - 7 * 24 * 3600; // Last 7 days in seconds
-        processedData = csvData.where((row) => row[0] >= cutoffTimestamp).toList();
+    final windowStartTimestamp = startTimestamp + (windowStartHour * 3600);
+    final windowEndTimestamp = startTimestamp + (windowEndHour * 3600);
+
+    // Create a map for quick lookup by timestamp
+    final dataMap = <int, Map<String, dynamic>>{};
+    for (var row in widget.csvData) {
+      if (row.length < 4) continue;
+      try {
+        final timestamp = row[0] as int;
+        if (timestamp >= windowStartTimestamp && timestamp < windowEndTimestamp) {
+          dataMap[timestamp] = {
+            'water_flow_rate': row[1] as double,
+            'battery_voltage': row[2] as double,
+            'tap_on_duration': row[3] as double,
+          };
+        }
+      } catch (e) {
+        _logger.e('Error processing row: $row, $e');
+      }
+    }
+
+    // Generate data for the selected window
+    final List<Map<String, dynamic>> hourlyData = [];
+    for (int t = windowStartTimestamp; t < windowEndTimestamp; t++) {
+      final data = dataMap[t] ?? {
+        'water_flow_rate': 0.0,
+        'battery_voltage': 0.0,
+        'tap_on_duration': 0.0,
+      };
+      hourlyData.add({
+        'timestamp': t,
+        'water_flow_rate': data['water_flow_rate'],
+        'battery_voltage': data['battery_voltage'],
+        'tap_on_duration': data['tap_on_duration'],
+      });
+    }
+
+    _logger.i('Processed hourly data: ${hourlyData.length} points for $_selectedHourlyView');
+    return hourlyData;
+  }
+
+  List<Map<String, dynamic>> _processDailyData() {
+    final startOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+    final startTimestamp = startOfDay.millisecondsSinceEpoch ~/ 1000;
+    final endTimestamp = startOfDay.add(const Duration(days: 1)).millisecondsSinceEpoch ~/ 1000;
+
+    // Group data by hour (24 buckets)
+    final hourlyBuckets = List.generate(24, (_) => <Map<String, dynamic>>[]);
+    for (var row in widget.csvData) {
+      if (row.length < 4) continue;
+      try {
+        final timestamp = row[0] as int;
+        if (timestamp >= startTimestamp && timestamp < endTimestamp) {
+          final dateTime = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+          final hour = dateTime.hour;
+          hourlyBuckets[hour].add({
+            'water_flow_rate': row[1] as double,
+            'battery_voltage': row[2] as double,
+            'tap_on_duration': row[3] as double,
+          });
+        }
+      } catch (e) {
+        _logger.e('Error processing row: $row, $e');
+      }
+    }
+
+    // Aggregate data for each hour
+    final List<Map<String, dynamic>> dailyData = [];
+    for (int hour = 0; hour < 24; hour++) {
+      final bucket = hourlyBuckets[hour];
+      double waterFlowRate = 0.0;
+      double batteryVoltage = 0.0;
+      double tapOnDuration = 0.0;
+
+      if (bucket.isNotEmpty) {
+        waterFlowRate = bucket.fold(0.0, (sum, item) => sum + item['water_flow_rate']) / bucket.length;
+        batteryVoltage = bucket.fold(0.0, (sum, item) => sum + item['battery_voltage']) / bucket.length;
+        tapOnDuration = bucket.fold(0.0, (sum, item) => sum + item['tap_on_duration']);
+      }
+
+      dailyData.add({
+        'timestamp': startTimestamp + (hour * 3600),
+        'water_flow_rate': waterFlowRate,
+        'battery_voltage': batteryVoltage,
+        'tap_on_duration': tapOnDuration,
+        'hour': hour,
+      });
+    }
+
+    _logger.i('Processed daily data: ${dailyData.length} points');
+    return dailyData;
+  }
+
+  List<Map<String, dynamic>> _processWeeklyData() {
+    final endOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 23, 59, 59);
+    final startOfPeriod = endOfDay.subtract(const Duration(days: 6));
+    final startTimestamp = startOfPeriod.millisecondsSinceEpoch ~/ 1000;
+    final endTimestamp = endOfDay.millisecondsSinceEpoch ~/ 1000;
+
+    // Group data by day (7 buckets)
+    final dailyBuckets = List.generate(7, (_) => <Map<String, dynamic>>[]);
+    for (var row in widget.csvData) {
+      if (row.length < 4) continue;
+      try {
+        final timestamp = row[0] as int;
+        if (timestamp >= startTimestamp && timestamp <= endTimestamp) {
+          final dateTime = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+          final dayDiff = endOfDay.difference(dateTime).inDays;
+          if (dayDiff >= 0 && dayDiff < 7) {
+            dailyBuckets[6 - dayDiff].add({
+              'water_flow_rate': row[1] as double,
+              'battery_voltage': row[2] as double,
+              'tap_on_duration': row[3] as double,
+            });
+          }
+        }
+      } catch (e) {
+        _logger.e('Error processing row: $row, $e');
+      }
+    }
+
+    // Aggregate data for each day
+    final List<Map<String, dynamic>> weeklyData = [];
+    for (int day = 0; day < 7; day++) {
+      final bucket = dailyBuckets[day];
+      double waterFlowRate = 0.0;
+      double batteryVoltage = 0.0;
+      double tapOnDuration = 0.0;
+
+      if (bucket.isNotEmpty) {
+        waterFlowRate = bucket.fold(0.0, (sum, item) => sum + item['water_flow_rate']) / bucket.length;
+        batteryVoltage = bucket.fold(0.0, (sum, item) => sum + item['battery_voltage']) / bucket.length;
+        tapOnDuration = bucket.fold(0.0, (sum, item) => sum + item['tap_on_duration']);
+      }
+
+      final dayDate = startOfPeriod.add(Duration(days: day));
+      weeklyData.add({
+        'timestamp': (dayDate.millisecondsSinceEpoch ~/ 1000),
+        'water_flow_rate': waterFlowRate,
+        'battery_voltage': batteryVoltage,
+        'tap_on_duration': tapOnDuration,
+        'date': dayDate,
+      });
+    }
+
+    _logger.i('Processed weekly data: ${weeklyData.length} points');
+    return weeklyData;
+  }
+
+  List<Map<String, dynamic>> _processMonthlyData() {
+    final endOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 23, 59, 59);
+    final startOfPeriod = endOfDay.subtract(const Duration(days: 27)); // Approx 4 weeks
+    final startTimestamp = startOfPeriod.millisecondsSinceEpoch ~/ 1000;
+    final endTimestamp = endOfDay.millisecondsSinceEpoch ~/ 1000;
+
+    // Group data by week (4 buckets)
+    final weeklyBuckets = List.generate(4, (_) => <Map<String, dynamic>>[]);
+    for (var row in widget.csvData) {
+      if (row.length < 4) continue;
+      try {
+        final timestamp = row[0] as int;
+        if (timestamp >= startTimestamp && timestamp <= endTimestamp) {
+          final dateTime = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+          final dayDiff = endOfDay.difference(dateTime).inDays;
+          final weekIndex = (dayDiff / 7).floor();
+          if (weekIndex >= 0 && weekIndex < 4) {
+            weeklyBuckets[3 - weekIndex].add({
+              'water_flow_rate': row[1] as double,
+              'battery_voltage': row[2] as double,
+              'tap_on_duration': row[3] as double,
+            });
+          }
+        }
+      } catch (e) {
+        _logger.e('Error processing row: $row, $e');
+      }
+    }
+
+    // Aggregate data for each week
+    final List<Map<String, dynamic>> monthlyData = [];
+    for (int week = 0; week < 4; week++) {
+      final bucket = weeklyBuckets[week];
+      double waterFlowRate = 0.0;
+      double batteryVoltage = 0.0;
+      double tapOnDuration = 0.0;
+
+      if (bucket.isNotEmpty) {
+        waterFlowRate = bucket.fold(0.0, (sum, item) => sum + item['water_flow_rate']) / bucket.length;
+        batteryVoltage = bucket.fold(0.0, (sum, item) => sum + item['battery_voltage']) / bucket.length;
+        tapOnDuration = bucket.fold(0.0, (sum, item) => sum + item['tap_on_duration']);
+      }
+
+      final weekStart = startOfPeriod.add(Duration(days: week * 7));
+      monthlyData.add({
+        'timestamp': (weekStart.millisecondsSinceEpoch ~/ 1000),
+        'water_flow_rate': waterFlowRate,
+        'battery_voltage': batteryVoltage,
+        'tap_on_duration': tapOnDuration,
+        'week_start': weekStart,
+      });
+    }
+
+    _logger.i('Processed monthly data: ${monthlyData.length} points');
+    return monthlyData;
+  }
+
+  List<Map<String, dynamic>> _processYearlyData() {
+    final endOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 23, 59, 59);
+    final startOfPeriod = DateTime(endOfDay.year - 1, endOfDay.month, endOfDay.day + 1);
+    final startTimestamp = startOfPeriod.millisecondsSinceEpoch ~/ 1000;
+    final endTimestamp = endOfDay.millisecondsSinceEpoch ~/ 1000;
+
+    // Group data by month (12 buckets)
+    final monthlyBuckets = List.generate(12, (_) => <Map<String, dynamic>>[]);
+    for (var row in widget.csvData) {
+      if (row.length < 4) continue;
+      try {
+        final timestamp = row[0] as int;
+        if (timestamp >= startTimestamp && timestamp <= endTimestamp) {
+          final dateTime = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+          final monthsDiff = ((endOfDay.year - dateTime.year) * 12 + endOfDay.month - dateTime.month);
+          if (monthsDiff >= 0 && monthsDiff < 12) {
+            monthlyBuckets[11 - monthsDiff].add({
+              'water_flow_rate': row[1] as double,
+              'battery_voltage': row[2] as double,
+              'tap_on_duration': row[3] as double,
+            });
+          }
+        }
+      } catch (e) {
+        _logger.e('Error processing row: $row, $e');
+      }
+    }
+
+    // Aggregate data for each month
+    final List<Map<String, dynamic>> yearlyData = [];
+    for (int month = 0; month < 12; month++) {
+      final bucket = monthlyBuckets[month];
+      double waterFlowRate = 0.0;
+      double batteryVoltage = 0.0;
+      double tapOnDuration = 0.0;
+
+      if (bucket.isNotEmpty) {
+        waterFlowRate = bucket.fold(0.0, (sum, item) => sum + item['water_flow_rate']) / bucket.length;
+        batteryVoltage = bucket.fold(0.0, (sum, item) => sum + item['battery_voltage']) / bucket.length;
+        tapOnDuration = bucket.fold(0.0, (sum, item) => sum + item['tap_on_duration']);
+      }
+
+      final monthDate = startOfPeriod.add(Duration(days: month * 30)); // Approximate
+      yearlyData.add({
+        'timestamp': (monthDate.millisecondsSinceEpoch ~/ 1000),
+        'water_flow_rate': waterFlowRate,
+        'battery_voltage': batteryVoltage,
+        'tap_on_duration': tapOnDuration,
+        'month': monthDate,
+      });
+    }
+
+    _logger.i('Processed yearly data: ${yearlyData.length} points');
+    return yearlyData;
+  }
+
+  Widget _buildSingleChart({
+    required String title,
+    required List<FlSpot> spots,
+    required Color color,
+    required List<Map<String, dynamic>> data,
+    required String xAxisLabel,
+    required double interval,
+    required String Function(double, TitleMeta) titleFormatter,
+  }) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8.0),
+          child: Text(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+        ),
+        Container(
+          height: 150, // Reduced height for each chart
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: LineChart(
+            LineChartData(
+              gridData: const FlGridData(show: true),
+              titlesData: FlTitlesData(
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 30,
+                    getTitlesWidget: (value, meta) {
+                      return SideTitleWidget(
+                        meta: meta,
+                        child: Text(
+                          titleFormatter(value, meta),
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                      );
+                    },
+                    interval: interval,
+                  ),
+                  axisNameWidget: Text(xAxisLabel),
+                  axisNameSize: 20,
+                ),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 40,
+                    getTitlesWidget: (value, meta) {
+                      return SideTitleWidget(
+                        meta: meta,
+                        child: Text(
+                          value.toStringAsFixed(1),
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              ),
+              borderData: FlBorderData(show: true),
+              lineBarsData: [
+                LineChartBarData(
+                  spots: spots,
+                  isCurved: false,
+                  color: color,
+                  dotData: const FlDotData(show: true),
+                  belowBarData: BarAreaData(show: false),
+                ),
+              ],
+              minX: _selectedResolution == 'Hourly' ? 0 : null,
+              maxX: _selectedResolution == 'Hourly' ? null : (data.length - 1).toDouble(),
+              lineTouchData: LineTouchData(
+                touchTooltipData: LineTouchTooltipData(
+                  getTooltipItems: (touchedSpots) {
+                    return touchedSpots.map((spot) {
+                      final index = spot.x.toInt();
+                      final item = data[index];
+                      String label = '';
+                      if (_selectedResolution == 'Hourly') {
+                        final dateTime = DateTime.fromMillisecondsSinceEpoch((item['timestamp'] * 1000).toInt());
+                        label = DateFormat('HH:mm:ss').format(dateTime);
+                      } else if (_selectedResolution == 'Daily') {
+                        label = '${item['hour']}:00';
+                      } else if (_selectedResolution == 'Weekly') {
+                        label = DateFormat('MM-dd').format(item['date']);
+                      } else if (_selectedResolution == 'Monthly') {
+                        label = DateFormat('MM-dd').format(item['week_start']);
+                      } else if (_selectedResolution == 'Yearly') {
+                        label = DateFormat('MMM yyyy').format(item['month']);
+                      }
+                      return LineTooltipItem(
+                        '$label\n${spot.y}',
+                        const TextStyle(color: Colors.white),
+                      );
+                    }).toList();
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildChart() {
+    List<Map<String, dynamic>> data;
+    String xAxisLabel = '';
+    double interval = 1;
+    String Function(double, TitleMeta) titleFormatter = (value, meta) => value.toString();
+
+    switch (_selectedResolution) {
+      case 'Hourly':
+        data = _processHourlyData();
+        xAxisLabel = 'Time';
+        interval = _selectedHourlyView == 'Full Day' ? 3600 : 1800; // Hourly: 1-hour ticks for Full Day, 30-min ticks for 3-hour
+        titleFormatter = (value, meta) {
+          final baseTimestamp = data.first['timestamp'] as int;
+          final dateTime = DateTime.fromMillisecondsSinceEpoch(((baseTimestamp + value) * 1000).toInt());
+          return DateFormat('HH:mm').format(dateTime);
+        };
+        break;
+      case 'Daily':
+        data = _processDailyData();
+        xAxisLabel = 'Hour';
+        interval = 1;
+        titleFormatter = (value, meta) => '${value.toInt()}:00';
+        break;
+      case 'Weekly':
+        data = _processWeeklyData();
+        xAxisLabel = 'Date';
+        interval = 1;
+        titleFormatter = (value, meta) {
+          final date = data[value.toInt()]['date'] as DateTime;
+          return DateFormat('MM-dd').format(date);
+        };
+        break;
+      case 'Monthly':
+        data = _processMonthlyData();
+        xAxisLabel = 'Week Start';
+        interval = 1;
+        titleFormatter = (value, meta) {
+          final date = data[value.toInt()]['week_start'] as DateTime;
+          return DateFormat('MM-dd').format(date);
+        };
+        break;
+      case 'Yearly':
+        data = _processYearlyData();
+        xAxisLabel = 'Month';
+        interval = 1;
+        titleFormatter = (value, meta) {
+          final date = data[value.toInt()]['month'] as DateTime;
+          return DateFormat('MMM').format(date);
+        };
+        break;
+      default:
+        return const SizedBox();
+    }
+
+    if (data.isEmpty) {
+      return const Center(child: Text('No data available'));
+    }
+
+    final waterFlowSpots = <FlSpot>[];
+    final batteryVoltageSpots = <FlSpot>[];
+    final tapOnDurationSpots = <FlSpot>[];
+
+    for (int i = 0; i < data.length; i++) {
+      final item = data[i];
+      if (_selectedResolution == 'Hourly') {
+        waterFlowSpots.add(FlSpot((item['timestamp'] - data.first['timestamp']).toDouble(), item['water_flow_rate']));
+        batteryVoltageSpots.add(FlSpot((item['timestamp'] - data.first['timestamp']).toDouble(), item['battery_voltage']));
+        tapOnDurationSpots.add(FlSpot((item['timestamp'] - data.first['timestamp']).toDouble(), item['tap_on_duration']));
       } else {
-        processedData = [];
+        waterFlowSpots.add(FlSpot(i.toDouble(), item['water_flow_rate']));
+        batteryVoltageSpots.add(FlSpot(i.toDouble(), item['battery_voltage']));
+        tapOnDurationSpots.add(FlSpot(i.toDouble(), item['tap_on_duration']));
       }
-    } else if (resolution == 'Hourly') {
-      processedData = csvData.length > 120 ? csvData.sublist(csvData.length - 120) : csvData;
-    } else {
-      processedData = csvData;
     }
 
-    logger.i('Processing ${processedData.length} rows for resolution: $resolution');
-
-    if (resolution == 'Hourly') {
-      // Second-level resolution: one FlSpot per row
-      List<FlSpot> tapDurationSpots = [];
-      List<FlSpot> batteryVoltageSpots = [];
-      List<FlSpot> waterFlowSpots = [];
-      for (var row in processedData) {
-        if (row.length < 5) {
-          logger.w('Invalid row format, expected 5 fields, got ${row.length}: $row');
-          continue;
-        }
-        try {
-          int timestamp = row[0];
-          double waterFlow = row[1];
-          double batteryVoltage = row[2];
-          double tapDuration = row[3];
-          if (tapDuration > 0) hasNonZeroTapDuration = true;
-          if (waterFlow > 0) hasNonZeroWaterFlow = true;
-          firstTimestamp ??= timestamp;
-
-          double secondsSinceFirst = (timestamp - firstTimestamp!).toDouble();
-          tapDurationSpots.add(FlSpot(secondsSinceFirst, tapDuration));
-          batteryVoltageSpots.add(FlSpot(secondsSinceFirst, batteryVoltage));
-          waterFlowSpots.add(FlSpot(secondsSinceFirst, waterFlow));
-          logger.d('Added FlSpot: seconds=$secondsSinceFirst, tapDuration=$tapDuration, batteryVoltage=$batteryVoltage, waterFlow=$waterFlow');
-        } catch (e) {
-          logger.e('Error processing row: $row, Error: $e');
-        }
-      }
-      return {
-        'tapDurationSpots': tapDurationSpots,
-        'batteryVoltageSpots': batteryVoltageSpots,
-        'waterFlowSpots': waterFlowSpots,
-        'firstTimestamp': firstTimestamp,
-      };
-    } else {
-      // Aggregate data for Daily, Weekly, Monthly
-      for (var row in processedData) {
-        if (row.length < 5) {
-          logger.w('Invalid row format, expected 5 fields, got ${row.length}: $row');
-          continue;
-        }
-        try {
-          int timestamp = row[0];
-          double waterFlow = row[1];
-          double batteryVoltage = row[2];
-          double tapDuration = row[3];
-          if (tapDuration > 0) hasNonZeroTapDuration = true;
-          if (waterFlow > 0) hasNonZeroWaterFlow = true;
-          DateTime date = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
-          firstTimestamp ??= timestamp;
-
-          String key;
-          if (resolution == 'Daily') {
-            key = DateFormat('yyyy-MM-dd HH').format(date); // Hourly aggregation
-          } else if (resolution == 'Weekly') {
-            key = DateFormat('yyyy-MM-ww').format(date);
-          } else {
-            key = DateFormat('yyyy-MM').format(date);
-          }
-          tapDurationSums[key] = (tapDurationSums[key] ?? 0) + tapDuration;
-          waterFlowSums[key] = (waterFlowSums[key] ?? 0) + waterFlow;
-          batteryVoltages[key] = batteryVoltage;
-        } catch (e) {
-          logger.e('Error processing row: $row, Error: $e');
-        }
-      }
-
-      logger.i('Aggregated ${tapDurationSums.length} keys: $tapDurationSums');
-      logger.i('Water flow sums: $waterFlowSums');
-      logger.i('Battery voltages: $batteryVoltages');
-      if (!hasNonZeroTapDuration) {
-        logger.w('No non-zero tap durations found in CSV data');
-      }
-      if (!hasNonZeroWaterFlow) {
-        logger.w('No non-zero water flow rates found in CSV data');
-      }
-
-      List<FlSpot> tapDurationSpots = [];
-      List<FlSpot> batteryVoltageSpots = [];
-      List<FlSpot> waterFlowSpots = [];
-      List<String> sortedKeys = tapDurationSums.keys.toList()..sort();
-      // Limit to last 7 aggregated points for Weekly and Monthly
-      if (resolution != 'Daily') {
-        sortedKeys = sortedKeys.length > 7 ? sortedKeys.sublist(sortedKeys.length - 7) : sortedKeys;
-      }
-      for (var key in sortedKeys) {
-        try {
-          DateTime date;
-          if (resolution == 'Daily') {
-            date = DateFormat('yyyy-MM-dd HH').parse(key);
-          } else {
-            date = DateFormat('yyyy-MM-dd').parse(key.split('-ww')[0].split('-').take(3).join('-'));
-          }
-          double hoursSinceFirst = (date.millisecondsSinceEpoch / 1000 - firstTimestamp!) / 3600;
-          tapDurationSpots.add(FlSpot(hoursSinceFirst, tapDurationSums[key]!));
-          batteryVoltageSpots.add(FlSpot(hoursSinceFirst, batteryVoltages[key]!));
-          waterFlowSpots.add(FlSpot(hoursSinceFirst, waterFlowSums[key]!));
-          logger.d('Added FlSpot: hours=$hoursSinceFirst, tapDuration=${tapDurationSums[key]}, batteryVoltage=${batteryVoltages[key]}, waterFlow=${waterFlowSums[key]}');
-        } catch (e) {
-          logger.e('Error parsing date key: $key, Error: $e');
-        }
-      }
-
-      return {
-        'tapDurationSpots': tapDurationSpots,
-        'batteryVoltageSpots': batteryVoltageSpots,
-        'waterFlowSpots': waterFlowSpots,
-        'firstTimestamp': firstTimestamp,
-      };
-    }
-  }
-
-  double _calculateWaterSavingPercentage() {
-    double totalTapDuration = _tapDurationSpots.fold(0, (sum, spot) => sum + spot.y);
-    int baseline = 3600 * _tapDurationSpots.length;
-    return baseline > 0 ? ((baseline - totalTapDuration) / baseline) * 100 : 0;
-  }
-
-  double _calculateWaterBillSavings() {
-    double totalTapDuration = _tapDurationSpots.fold(0, (sum, spot) => sum + spot.y);
-    return totalTapDuration * 0.01;
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          _buildSingleChart(
+            title: 'Water Flow Rate',
+            spots: waterFlowSpots,
+            color: Colors.blue,
+            data: data,
+            xAxisLabel: xAxisLabel,
+            interval: interval,
+            titleFormatter: titleFormatter,
+          ),
+          _buildSingleChart(
+            title: 'Battery Voltage',
+            spots: batteryVoltageSpots,
+            color: Colors.green,
+            data: data,
+            xAxisLabel: xAxisLabel,
+            interval: interval,
+            titleFormatter: titleFormatter,
+          ),
+          _buildSingleChart(
+            title: 'Tap On Duration',
+            spots: tapOnDurationSpots,
+            color: Colors.red,
+            data: data,
+            xAxisLabel: xAxisLabel,
+            interval: interval,
+            titleFormatter: titleFormatter,
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Reports')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            DropdownButton<String>(
-              value: _resolution,
-              items: ['Hourly', 'Daily', 'Weekly', 'Monthly']
-                  .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                  .toList(),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  onPressed: _previousDay,
+                  icon: const Icon(Icons.arrow_left),
+                  tooltip: 'Previous Day',
+                ),
+                const Text('Select Date: '),
+                TextButton(
+                  onPressed: _selectDate,
+                  child: Text(
+                    DateFormat('yyyy-MM-dd').format(_selectedDate),
+                    style: const TextStyle(fontSize: 16, color: Colors.blue),
+                  ),
+                ),
+                IconButton(
+                  onPressed: _nextDay,
+                  icon: const Icon(Icons.arrow_right),
+                  tooltip: 'Next Day',
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: DropdownButton<String>(
+              value: _selectedResolution,
+              isExpanded: true,
+              items: _resolutions.map((String resolution) {
+                return DropdownMenuItem<String>(
+                  value: resolution,
+                  child: Text(resolution),
+                );
+              }).toList(),
               onChanged: (value) {
                 setState(() {
-                  _resolution = value!;
-                  _updateData();
+                  _selectedResolution = value!;
+                  if (_selectedResolution != 'Hourly') {
+                    _selectedHourlyView = 'Full Day'; // Reset to Full Day for non-Hourly
+                  }
                 });
+                _logger.i('Resolution changed to: $_selectedResolution');
               },
             ),
-            const SizedBox(height: 20),
-            const Text('Water Flow Rate (L/s)', style: TextStyle(fontSize: 18)),
-            Container(
-              height: 200,
-              padding: const EdgeInsets.all(8.0),
-              child: _waterFlowSpots.isEmpty || _waterFlowSpots.every((spot) => spot.y == 0)
-                  ? const Center(child: Text('No water flow data available'))
-                  : LineChart(
-                LineChartData(
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: _waterFlowSpots,
-                      isCurved: true,
-                      color: Colors.orange,
-                      dotData: const FlDotData(show: false),
-                    ),
-                  ],
-                  titlesData: FlTitlesData(
-                    leftTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: true, reservedSize: 40),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          if (_firstTimestamp == null) return const Text('');
-                          final date = DateTime.fromMillisecondsSinceEpoch(
-                              (_firstTimestamp! + value * 3600).toInt() * 1000);
-                          if (_resolution == 'Hourly') {
-                            final seconds = value.toInt();
-                            return Text(DateFormat('mm:ss').format(
-                                DateTime.fromMillisecondsSinceEpoch(
-                                    (_firstTimestamp! + seconds) * 1000)));
-                          } else if (_resolution == 'Daily') {
-                            return Text(DateFormat('MM-dd HH:00').format(date));
-                          } else {
-                            return Text(DateFormat('MM-dd').format(date));
-                          }
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(),
-                    rightTitles: const AxisTitles(),
-                  ),
-                  gridData: const FlGridData(show: true),
-                  borderData: FlBorderData(show: true),
-                ),
+          ),
+          if (_selectedResolution == 'Hourly')
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              child: DropdownButton<String>(
+                value: _selectedHourlyView,
+                isExpanded: true,
+                items: _hourlyViews.map((String view) {
+                  return DropdownMenuItem<String>(
+                    value: view,
+                    child: Text(view),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedHourlyView = value!;
+                  });
+                  _logger.i('Hourly view changed to: $_selectedHourlyView');
+                },
               ),
             ),
-            const SizedBox(height: 20),
-            const Text('Tap-On Duration (seconds)', style: TextStyle(fontSize: 18)),
-            Container(
-              height: 200,
-              padding: const EdgeInsets.all(8.0),
-              child: _tapDurationSpots.isEmpty || _tapDurationSpots.every((spot) => spot.y == 0)
-                  ? const Center(child: Text('No tap duration data available'))
-                  : LineChart(
-                LineChartData(
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: _tapDurationSpots,
-                      isCurved: true,
-                      color: Colors.blue,
-                      dotData: const FlDotData(show: false),
-                    ),
-                  ],
-                  titlesData: FlTitlesData(
-                    leftTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: true, reservedSize: 40),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          if (_firstTimestamp == null) return const Text('');
-                          final date = DateTime.fromMillisecondsSinceEpoch(
-                              (_firstTimestamp! + value * 3600).toInt() * 1000);
-                          if (_resolution == 'Hourly') {
-                            final seconds = value.toInt();
-                            return Text(DateFormat('mm:ss').format(
-                                DateTime.fromMillisecondsSinceEpoch(
-                                    (_firstTimestamp! + seconds) * 1000)));
-                          } else if (_resolution == 'Daily') {
-                            return Text(DateFormat('MM-dd HH:00').format(date));
-                          } else {
-                            return Text(DateFormat('MM-dd').format(date));
-                          }
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(),
-                    rightTitles: const AxisTitles(),
-                  ),
-                  gridData: const FlGridData(show: true),
-                  borderData: FlBorderData(show: true),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text('Battery Voltage (V)', style: TextStyle(fontSize: 18)),
-            Container(
-              height: 200,
-              padding: const EdgeInsets.all(8.0),
-              child: _batteryVoltageSpots.isEmpty
-                  ? const Center(child: Text('No battery voltage data available'))
-                  : LineChart(
-                LineChartData(
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: _batteryVoltageSpots,
-                      isCurved: true,
-                      color: Colors.green,
-                      dotData: const FlDotData(show: false),
-                    ),
-                  ],
-                  titlesData: FlTitlesData(
-                    leftTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: true, reservedSize: 40),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          if (_firstTimestamp == null) return const Text('');
-                          final date = DateTime.fromMillisecondsSinceEpoch(
-                              (_firstTimestamp! + value * 3600).toInt() * 1000);
-                          if (_resolution == 'Hourly') {
-                            final seconds = value.toInt();
-                            return Text(DateFormat('mm:ss').format(
-                                DateTime.fromMillisecondsSinceEpoch(
-                                    (_firstTimestamp! + seconds) * 1000)));
-                          } else if (_resolution == 'Daily') {
-                            return Text(DateFormat('MM-dd HH:00').format(date));
-                          } else {
-                            return Text(DateFormat('MM-dd').format(date));
-                          }
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(),
-                    rightTitles: const AxisTitles(),
-                  ),
-                  gridData: const FlGridData(show: true),
-                  borderData: FlBorderData(show: true),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Text('Water Saving: ${_calculateWaterSavingPercentage().toStringAsFixed(2)}%'),
-            Text('Water Bill Savings: \$${(_calculateWaterBillSavings()).toStringAsFixed(2)}'),
-          ],
-        ),
+          Expanded(child: _buildChart()),
+        ],
       ),
     );
   }

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'screens/home_screen.dart';
+import 'screens/splash_screen.dart';
 
 void main() {
-  runApp(WaterMonitorApp());
+  runApp(const WaterMonitorApp());
 }
 
 class WaterMonitorApp extends StatelessWidget {
@@ -11,9 +11,10 @@ class WaterMonitorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       title: 'Water Monitor',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: HomeScreen(),
+      home: const SplashScreen(),
     );
   }
 }
