@@ -1,14 +1,15 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:logger/logger.dart';
 import 'package:provider/provider.dart';
 import 'data_state_model.dart';
+import '../services/debug_service.dart';
 import 'dart:convert';
 import 'dart:async';
 
 class ConnectionStateModel extends ChangeNotifier {
   final Logger _logger = Logger();
+  final DebugService _debugService = DebugService();
   String _connectionStatus = 'Disconnected';
   bool _isConnected = false;
   BluetoothDevice? _device;
@@ -22,8 +23,23 @@ class ConnectionStateModel extends ChangeNotifier {
   bool _isFullRetrieval = false;
   String _deviceTime = 'Not available';
   bool _isActive = true;
+  // SD card status properties
+  bool _sdPresent = false;
+  bool _fileExists = false;
+  int _fileSize = 0;
+  int _lastModified = 0;
+  final List<void Function(String)> _endOfDataListeners = [];
+  final List<void Function(String)> _lineListeners = [];
+  final List<void Function(List<int>)> _dataListeners = [];
+
+  // Getters for SD card status
+  bool get sdPresent => _sdPresent;
+  bool get fileExists => _fileExists;
+  int get fileSize => _fileSize;
+  int get lastModified => _lastModified;
+
   final StreamController<List<dynamic>> _liveDataController =
-  StreamController<List<dynamic>>.broadcast();
+      StreamController<List<dynamic>>.broadcast();
 
   String get connectionStatus => _connectionStatus;
   bool get isConnected => _isConnected;
@@ -44,9 +60,49 @@ class ConnectionStateModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> connectToDevice(
-      BluetoothDevice device, VoidCallback? onDialogClose, BuildContext context) async {
+  void updateSdStatus(bool present, bool exists, int size, int lastModified) {
+    _sdPresent = present;
+    _fileExists = exists;
+    _fileSize = size;
+    _lastModified = lastModified;
+    _logger.i(
+        'SD status updated: present=$present, exists=$exists, size=$size, lastModified=$lastModified');
+    notifyListeners();
+  }
+
+  Future<bool> requestSdStatus() async {
+    return await writeCommand('GET_SD_STATUS');
+  }
+
+  void addEndOfDataListener(void Function(String) listener) {
+    _endOfDataListeners.add(listener);
+  }
+
+  void removeEndOfDataListener(void Function(String) listener) {
+    _endOfDataListeners.remove(listener);
+  }
+
+  void addLineListener(void Function(String) listener) {
+    _lineListeners.add(listener);
+  }
+
+  void removeLineListener(void Function(String) listener) {
+    _lineListeners.remove(listener);
+  }
+
+  void addDataListener(void Function(List<int>) listener) {
+    _dataListeners.add(listener);
+  }
+
+  void removeDataListener(void Function(List<int>) listener) {
+    _dataListeners.remove(listener);
+  }
+
+  Future<void> connectToDevice(BluetoothDevice device,
+      VoidCallback? onDialogClose, BuildContext context) async {
     _logger.i('Connecting to ${device.platformName}');
+    _debugService.logConnection('Connecting to ${device.platformName}',
+        tag: 'BT');
     _isActive = true;
     try {
       await device.connect(timeout: const Duration(seconds: 20));
@@ -63,13 +119,14 @@ class ConnectionStateModel extends ChangeNotifier {
 
       _connectionStateSubscription?.cancel();
       _connectionStateSubscription = device.connectionState.listen(
-            (state) {
+        (state) {
           _logger.d('Device connection state changed: $state');
           if (state == BluetoothConnectionState.disconnected && _isConnected) {
             _logger.w('Device disconnected unexpectedly');
             _cleanup();
             updateConnectionState('Disconnected', false);
-          } else if (state == BluetoothConnectionState.connected && !_isConnected) {
+          } else if (state == BluetoothConnectionState.connected &&
+              !_isConnected) {
             _logger.i('Device reconnected');
             updateConnectionState('Connection established', true);
           }
@@ -81,7 +138,8 @@ class ConnectionStateModel extends ChangeNotifier {
       BluetoothService? uartService;
       const serviceUUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
       for (var service in services) {
-        if (service.uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
+        if (service.uuid.toString().toLowerCase() ==
+            serviceUUID.toLowerCase()) {
           uartService = service;
           break;
         }
@@ -98,9 +156,11 @@ class ConnectionStateModel extends ChangeNotifier {
       const txUUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
       const rxUUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
       for (var characteristic in uartService.characteristics) {
-        if (characteristic.uuid.toString().toLowerCase() == txUUID.toLowerCase()) {
+        if (characteristic.uuid.toString().toLowerCase() ==
+            txUUID.toLowerCase()) {
           _uartTx = characteristic;
-        } else if (characteristic.uuid.toString().toLowerCase() == rxUUID.toLowerCase()) {
+        } else if (characteristic.uuid.toString().toLowerCase() ==
+            rxUUID.toLowerCase()) {
           _uartRx = characteristic;
         }
       }
@@ -113,7 +173,8 @@ class ConnectionStateModel extends ChangeNotifier {
         return;
       }
 
-      _logger.i('RX characteristic properties: ${_uartRx!.properties.toString()}');
+      _logger
+          .i('RX characteristic properties: ${_uartRx!.properties.toString()}');
       if (_uartRx!.properties.notify || _uartRx!.properties.indicate) {
         try {
           await _uartRx!.setNotifyValue(true);
@@ -130,20 +191,34 @@ class ConnectionStateModel extends ChangeNotifier {
       final dataModel = Provider.of<DataStateModel>(context, listen: false);
       _characteristicSubscription?.cancel();
       _characteristicSubscription = _uartRx!.lastValueStream.listen(
-            (value) {
+        (value) {
           if (value.isNotEmpty && _isActive) {
+            // Debug logging for raw data
+            _debugService.logRawData(value, tag: 'BT');
+
+            // Notify data listeners with raw bytes
+            for (final listener in _dataListeners) {
+              listener(value);
+            }
+
             try {
               String data = utf8.decode(value, allowMalformed: true).trim();
               if (data.isNotEmpty) {
                 _logger.d('Raw data received: $data');
+                _debugService.logParsedData(data, tag: 'BT');
                 _parseReceivedData(data, dataModel);
               }
             } catch (e) {
               _logger.e('Error decoding data: $e');
+              _debugService.logError('Error decoding data: $e', tag: 'BT');
             }
           }
         },
-        onError: (e) => _logger.e('Characteristic subscription error: $e'),
+        onError: (e) {
+          _logger.e('Characteristic subscription error: $e');
+          _debugService.logError('Characteristic subscription error: $e',
+              tag: 'BT');
+        },
       );
 
       updateConnectionState('Connection established', true);
@@ -181,19 +256,24 @@ class ConnectionStateModel extends ChangeNotifier {
   Future<bool> writeCommand(String command) async {
     if (!_isConnected || _uartTx == null) {
       _logger.w('Cannot write: Not connected or TX unavailable');
+      _debugService.logError('Cannot write: Not connected or TX unavailable',
+          tag: 'BT');
       return false;
     }
     try {
       await _uartTx!.write(utf8.encode('$command\n'));
       _logger.i('Wrote command: $command');
+      _debugService.logCommand(command, tag: 'BT');
       return true;
     } catch (e) {
       _logger.e('Failed to write command: $e');
+      _debugService.logError('Failed to write command: $e', tag: 'BT');
       return false;
     }
   }
 
-  void _processCsvRow(String row, {bool isFullRetrieval = false, required DataStateModel dataModel}) {
+  void _processCsvRow(String row,
+      {bool isFullRetrieval = false, required DataStateModel dataModel}) {
     _logger.d('Processing row: $row, isFullRetrieval: $isFullRetrieval');
     List<String> fields = row.split(',');
     if (fields.length == 4) {
@@ -202,59 +282,129 @@ class ConnectionStateModel extends ChangeNotifier {
         double flowRate = double.parse(fields[1]);
         double batteryVoltage = double.parse(fields[2]);
         double tapOnDuration = double.parse(fields[3]);
-        dataModel.csvData.add([timestamp, flowRate, batteryVoltage, tapOnDuration]);
-        _liveDataController.add([timestamp, flowRate, batteryVoltage, tapOnDuration]);
+        dataModel.csvData
+            .add([timestamp, flowRate, batteryVoltage, tapOnDuration]);
+        _liveDataController
+            .add([timestamp, flowRate, batteryVoltage, tapOnDuration]);
         _logger.i('Parsed and added row: $fields');
       } catch (e) {
         _logger.e('Error parsing CSV row: $row, Error: $e');
       }
     } else {
-      _logger.w('Invalid row format, expected 4 fields, got ${fields.length}: $row');
+      _logger.w(
+          'Invalid row format, expected 4 fields, got ${fields.length}: $row');
+    }
+  }
+
+  void _processSdStatusRow(String row) {
+    List<String> fields = row.split(',');
+    if (fields.length == 4) {
+      try {
+        bool sdPresent = int.parse(fields[0]) == 1;
+        bool fileExists = int.parse(fields[1]) == 1;
+        int fileSize = int.parse(fields[2]);
+        int lastModified = int.parse(fields[3]);
+
+        updateSdStatus(sdPresent, fileExists, fileSize, lastModified);
+      } catch (e) {
+        _logger.e('Error parsing SD status row: $row, Error: $e');
+        updateSdStatus(false, false, 0, 0);
+      }
+    } else {
+      _logger.w(
+          'Invalid SD status row format, expected 5 fields, got ${fields.length}: $row');
+      updateSdStatus(false, false, 0, 0);
+    }
+  }
+
+  bool _isSdStatusRow(String row) {
+    List<String> fields = row.split(',');
+    if (fields.length != 4) return false;
+    try {
+      // Check if all fields can be parsed as integers
+      int.parse(fields[0]);
+      int.parse(fields[1]);
+      int.parse(fields[2]);
+      int.parse(fields[3]);
+      return true;
+    } catch (e) {
+      return false;
     }
   }
 
   void _parseReceivedData(String data, DataStateModel dataModel) {
     _dataBuffer += data;
-    _logger.d('Buffer updated: $_dataBuffer, isFullRetrieval: $_isFullRetrieval');
+    _logger
+        .d('Buffer updated: $_dataBuffer, isFullRetrieval: $_isFullRetrieval');
 
     while (_dataBuffer.isNotEmpty) {
-      if (_dataBuffer == 'OK') {
+      String? lineToNotify;
+
+      // Check for file transfer protocol and other protocol lines first
+      if (_dataBuffer.startsWith('FILE_SIZE:')) {
+        _logger.i('Received FILE_SIZE: $_dataBuffer');
+        lineToNotify = _dataBuffer;
+        _dataBuffer = '';
+        continue;
+      } else if (_dataBuffer == 'FILE_START') {
+        _logger.i('Received FILE_START');
+        lineToNotify = _dataBuffer;
+        _dataBuffer = '';
+        continue;
+      } else if (_dataBuffer == 'FILE_END') {
+        _logger.i('Received FILE_END');
+        lineToNotify = _dataBuffer;
+        _dataBuffer = '';
+        continue;
+      } else if (_dataBuffer == 'OK') {
         _logger.i('Received OK');
+        lineToNotify = _dataBuffer;
         _dataBuffer = '';
         continue;
       } else if (_dataBuffer == 'PONG') {
         _logger.i('Received PONG');
+        lineToNotify = _dataBuffer;
         _dataBuffer = '';
         continue;
       } else if (_dataBuffer.startsWith('ERROR:')) {
         _logger.e('Error received: $_dataBuffer');
+        lineToNotify = _dataBuffer;
         _dataBuffer = '';
         continue;
       } else if (_dataBuffer.startsWith('TIME:')) {
         try {
           final timestamp = int.parse(_dataBuffer.split(':')[1].trim());
-          final dateTime = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+          final dateTime =
+              DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
           _logger.i('Received device time: $dateTime');
           updateDeviceTime(dateTime.toString());
         } catch (e) {
           _logger.e('Invalid TIME response: $_dataBuffer, Error: $e');
           updateDeviceTime('Invalid response');
         }
+        lineToNotify = _dataBuffer;
         _dataBuffer = '';
         continue;
       } else if (_dataBuffer == 'SEND_START') {
         _logger.i('Received SEND_START');
         _isReceivingData = true;
         _pendingRow = null;
+        lineToNotify = _dataBuffer;
         _dataBuffer = '';
         continue;
       } else if (_dataBuffer == 'SEND_END' && _isReceivingData) {
         _logger.i('Received SEND_END');
         _isReceivingData = false;
         if (_pendingRow != null) {
-          _processCsvRow(_pendingRow!, isFullRetrieval: _isFullRetrieval, dataModel: dataModel);
+          if (_isSdStatusRow(_pendingRow!)) {
+            _processSdStatusRow(_pendingRow!);
+          } else {
+            _processCsvRow(_pendingRow!,
+                isFullRetrieval: _isFullRetrieval, dataModel: dataModel);
+          }
           _pendingRow = null;
         }
+        lineToNotify = _dataBuffer;
         _dataBuffer = '';
         _isFullRetrieval = false;
         continue;
@@ -262,11 +412,28 @@ class ConnectionStateModel extends ChangeNotifier {
         _logger.i('Received END_OF_DATA');
         _isReceivingData = false;
         if (_pendingRow != null) {
-          _processCsvRow(_pendingRow!, isFullRetrieval: _isFullRetrieval, dataModel: dataModel);
+          _processCsvRow(_pendingRow!,
+              isFullRetrieval: _isFullRetrieval, dataModel: dataModel);
           _pendingRow = null;
+        }
+        // Notify listeners
+        for (final listener in _endOfDataListeners) {
+          listener('END_OF_DATA');
+        }
+        // NEW: Notify line listeners directly
+        for (final listener in _lineListeners) {
+          listener('END_OF_DATA');
         }
         _dataBuffer = '';
         _isFullRetrieval = false;
+        continue;
+      } else if (_dataBuffer.startsWith('TOTAL_ROWS:')) {
+        _logger.i('Received TOTAL_ROWS: $_dataBuffer');
+        // Notify line listeners
+        for (final listener in _lineListeners) {
+          listener(_dataBuffer);
+        }
+        _dataBuffer = '';
         continue;
       }
 
@@ -276,7 +443,13 @@ class ConnectionStateModel extends ChangeNotifier {
           List<String> fields = _dataBuffer.split(',');
           if (fields.length >= 4) {
             _pendingRow = _dataBuffer;
-            _processCsvRow(_pendingRow!, isFullRetrieval: _isFullRetrieval, dataModel: dataModel);
+            if (_isSdStatusRow(_pendingRow!)) {
+              _processSdStatusRow(_pendingRow!);
+            } else {
+              _processCsvRow(_pendingRow!,
+                  isFullRetrieval: _isFullRetrieval, dataModel: dataModel);
+            }
+            lineToNotify = _pendingRow;
             _pendingRow = null;
             _dataBuffer = '';
           } else {
@@ -288,7 +461,13 @@ class ConnectionStateModel extends ChangeNotifier {
           _dataBuffer = _dataBuffer.substring(newlineIndex + 1);
           if (line.isNotEmpty) {
             _pendingRow = line;
-            _processCsvRow(_pendingRow!, isFullRetrieval: _isFullRetrieval, dataModel: dataModel);
+            if (_isSdStatusRow(_pendingRow!)) {
+              _processSdStatusRow(_pendingRow!);
+            } else {
+              _processCsvRow(_pendingRow!,
+                  isFullRetrieval: _isFullRetrieval, dataModel: dataModel);
+            }
+            lineToNotify = _pendingRow;
             _pendingRow = null;
           }
           continue;
@@ -297,8 +476,19 @@ class ConnectionStateModel extends ChangeNotifier {
           break;
         }
       } else {
-        _logger.w('Unexpected data, not in SEND_START/SEND_END block: $_dataBuffer');
+        // For file transfer mode, we don't process data as CSV - it's handled by data listeners
+        // Just log and clear the buffer to avoid accumulation
+        _logger.d(
+            'Received data in non-CSV mode (likely file transfer): $_dataBuffer');
         _dataBuffer = '';
+        continue;
+      }
+
+      // Notify all line listeners for every line
+      if (lineToNotify != null) {
+        for (final listener in _lineListeners) {
+          listener(lineToNotify);
+        }
       }
     }
   }
@@ -317,6 +507,10 @@ class ConnectionStateModel extends ChangeNotifier {
     _pendingRow = null;
     _isFullRetrieval = false;
     _deviceTime = 'Not available';
+    _sdPresent = false;
+    _fileExists = false;
+    _fileSize = 0;
+    _lastModified = 0;
     notifyListeners();
   }
 
