@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'home_screen.dart';
+import '../models/settings_model.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -107,7 +109,10 @@ class _SplashScreenState extends State<SplashScreen>
     });
 
     // Navigate to home screen after animations
-    Timer(const Duration(milliseconds: 5000), () {
+    final settingsModel = Provider.of<SettingsModel>(context, listen: false);
+    final splashDurationMs = settingsModel.splashDuration * 1000;
+
+    Timer(Duration(milliseconds: splashDurationMs), () {
       Navigator.pushReplacement(
         context,
         PageTransition(const HomeScreen()),

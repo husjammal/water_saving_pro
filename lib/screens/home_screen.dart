@@ -17,6 +17,7 @@ import 'bluetooth_scan_dialog.dart';
 import '../models/data_retrieval_service.dart';
 import '../services/sound_service.dart';
 import '../services/debug_service.dart';
+import '../services/navigation_service.dart';
 
 final RouteObserver<PageRoute> routeObserver = RouteObserver<PageRoute>();
 
@@ -72,6 +73,8 @@ class _HomeScreenState extends State<HomeScreen>
       Provider.of<DataStateModel>(context, listen: false).loadPersistedData();
       _didLoadPersistedData = true;
     }
+    // Update NavigationService to reflect we're on home screen
+    NavigationService().updateCurrentScreen('home');
     // Only restart live data if auto-start is enabled
     _unsubscribeFromLiveData();
     if (_connectionModel?.isConnected == true && _shouldAutoStartLiveData) {
@@ -88,12 +91,24 @@ class _HomeScreenState extends State<HomeScreen>
     _liveDataSubscription?.cancel();
     final connectionModel = _connectionModel;
     if (connectionModel != null) {
-      _liveDataSubscription = connectionModel.liveDataStream.listen((data) {
-        setState(() {
-          _latestLiveData = data;
-          _detectFlowChange(data);
-        });
-      });
+      _logger.i('Subscribing to live data stream...');
+      _liveDataSubscription = connectionModel.liveDataStream.listen(
+        (data) {
+          setState(() {
+            _latestLiveData = data;
+            _detectFlowChange(data);
+          });
+        },
+        onError: (error) {
+          _logger.e('Live data stream error: $error');
+        },
+        onDone: () {
+          _logger.i('Live data stream completed');
+        },
+      );
+      _logger.i('Live data subscription established');
+    } else {
+      _logger.w('Cannot subscribe to live data: connectionModel is null');
     }
   }
 
@@ -148,8 +163,12 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _unsubscribeFromLiveData() {
-    _liveDataSubscription?.cancel();
-    _liveDataSubscription = null;
+    if (_liveDataSubscription != null) {
+      _logger.i('Unsubscribing from live data stream...');
+      _liveDataSubscription?.cancel();
+      _liveDataSubscription = null;
+      _logger.i('Live data subscription cancelled');
+    }
   }
 
   void _startLiveDataIfConnected() async {
@@ -158,11 +177,16 @@ class _HomeScreenState extends State<HomeScreen>
         connectionModel.isConnected &&
         !_isStartingLiveData) {
       _isStartingLiveData = true;
+      _logger.i('Starting live data if connected...');
       // Add a small delay to prevent rapid command succession
       await Future.delayed(const Duration(milliseconds: 500));
       await _startLiveData();
       _subscribeToLiveData();
       _isStartingLiveData = false;
+      _logger.i('Live data started and subscription established');
+    } else {
+      _logger.i(
+          'Cannot start live data: connected=${connectionModel?.isConnected}, isStarting=$_isStartingLiveData');
     }
   }
 
@@ -807,13 +831,28 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void didPopNext() {
     // HomeScreen is visible again
+    _logger.i('HomeScreen visible again: checking live data status');
     if (_connectionModel?.isConnected == true && _shouldAutoStartLiveData) {
       _logger.i('HomeScreen visible again: (Re)starting live data');
+      // First, ensure we're unsubscribed to avoid duplicate subscriptions
+      _unsubscribeFromLiveData();
       // Add a small delay to ensure previous commands are processed
-      Future.delayed(const Duration(milliseconds: 300), () {
+      Future.delayed(const Duration(milliseconds: 500), () {
         if (mounted) {
           _startLiveDataIfConnected();
+          // Ensure subscription is established
+          if (_liveDataSubscription == null) {
+            _logger.i('Subscription was null, re-establishing...');
+            _subscribeToLiveData();
+          }
         }
+      });
+    } else {
+      _logger
+          .i('HomeScreen visible again: not connected or auto-start disabled');
+      // Clear any stale data
+      setState(() {
+        _latestLiveData = null;
       });
     }
   }
@@ -976,7 +1015,53 @@ class _HomeScreenState extends State<HomeScreen>
           },
           child: Scaffold(
             backgroundColor: const Color(0xFFF5F7FA),
-            drawer: const AppDrawer(),
+            drawer: AppDrawer(
+              onDisableAutoStartLiveData: _disableAutoStartLiveData,
+              onEnableAutoStartLiveData: _enableAutoStartLiveData,
+              onNavigateToRetrieveData: () async {
+                await _soundService.playNotificationSound();
+                _disableAutoStartLiveData();
+                NavigationService().updateCurrentScreen('retrieve_data');
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => RetrieveDataScreen(
+                      onRetrieveData: _retrieveData,
+                      onRetrieveAllData: _retrieveAllData,
+                      onSetManualTimestamp: _setManualTimestamp,
+                      onClearCsvData: _clearCsvData,
+                      onCleanCsvData: _cleanCsvData,
+                    ),
+                  ),
+                ).then((_) {
+                  _enableAutoStartLiveData();
+                });
+              },
+              onNavigateToSettings: () async {
+                await _soundService.playNotificationSound();
+                _disableAutoStartLiveData();
+                NavigationService().updateCurrentScreen('settings');
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SettingsScreen(
+                      utcOffset: _utcOffset,
+                      onDisconnectDevice: _disconnectDevice,
+                      onSyncTime: _syncTime,
+                      onReadDeviceTime: _readDeviceTime,
+                      onUpdateUtcOffset: (value) {
+                        setState(() {
+                          _utcOffset = value;
+                        });
+                        _logger.i('UTC offset changed to: $_utcOffset');
+                      },
+                    ),
+                  ),
+                ).then((_) {
+                  _enableAutoStartLiveData();
+                });
+              },
+            ),
             body: CustomScrollView(
               slivers: [
                 // Custom App Bar
@@ -1235,7 +1320,7 @@ class _HomeScreenState extends State<HomeScreen>
                                                 value: (connectionModel
                                                             .isConnected &&
                                                         _latestLiveData != null)
-                                                    ? '${_latestLiveData![1].toStringAsFixed(2)} L/s'
+                                                    ? '${(_latestLiveData![1] * 60).toStringAsFixed(2)} L/min'
                                                     : '--',
                                                 color: _isWaterFlowing
                                                     ? const Color(0xFF2196F3)
@@ -1602,6 +1687,9 @@ class _HomeScreenState extends State<HomeScreen>
                                                 await _soundService
                                                     .playNotificationSound();
                                                 _disableAutoStartLiveData();
+                                                NavigationService()
+                                                    .updateCurrentScreen(
+                                                        'retrieve_data');
                                                 Navigator.push(
                                                   context,
                                                   MaterialPageRoute(
@@ -1632,6 +1720,9 @@ class _HomeScreenState extends State<HomeScreen>
                                                 await _soundService
                                                     .playNotificationSound();
                                                 _disableAutoStartLiveData();
+                                                NavigationService()
+                                                    .updateCurrentScreen(
+                                                        'reports');
                                                 Navigator.push(
                                                   context,
                                                   MaterialPageRoute(
@@ -1655,6 +1746,9 @@ class _HomeScreenState extends State<HomeScreen>
                                               onTap: () async {
                                                 await _soundService
                                                     .playNotificationSound();
+                                                NavigationService()
+                                                    .updateCurrentScreen(
+                                                        'live_charts');
                                                 _navigateToLiveCharts();
                                               },
                                             ),
@@ -1666,6 +1760,9 @@ class _HomeScreenState extends State<HomeScreen>
                                                 await _soundService
                                                     .playNotificationSound();
                                                 _disableAutoStartLiveData();
+                                                NavigationService()
+                                                    .updateCurrentScreen(
+                                                        'settings');
                                                 Navigator.push(
                                                   context,
                                                   MaterialPageRoute(

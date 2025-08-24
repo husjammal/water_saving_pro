@@ -8,10 +8,12 @@ class SettingsModel extends ChangeNotifier {
   // Default values
   double _maxFlowRate = 2.0; // L/s
   double _unitPrice = 1.0; // USD per liter
+  int _splashDuration = 3; // seconds
 
   // Getters
   double get maxFlowRate => _maxFlowRate;
   double get unitPrice => _unitPrice;
+  int get splashDuration => _splashDuration;
 
   SettingsModel() {
     _loadSettings();
@@ -22,8 +24,9 @@ class SettingsModel extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       _maxFlowRate = prefs.getDouble('maxFlowRate') ?? 2.0;
       _unitPrice = prefs.getDouble('unitPrice') ?? 1.0;
+      _splashDuration = prefs.getInt('splashDuration') ?? 3;
       _logger.i(
-          'Loaded settings: maxFlowRate=$_maxFlowRate, unitPrice=$_unitPrice');
+          'Loaded settings: maxFlowRate=$_maxFlowRate, unitPrice=$_unitPrice, splashDuration=$_splashDuration');
       notifyListeners();
     } catch (e) {
       _logger.e('Failed to load settings: $e');
@@ -54,6 +57,20 @@ class SettingsModel extends ChangeNotifier {
         notifyListeners();
       } catch (e) {
         _logger.e('Failed to save unitPrice: $e');
+      }
+    }
+  }
+
+  Future<void> updateSplashDuration(int value) async {
+    if (value != _splashDuration) {
+      _splashDuration = value;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt('splashDuration', value);
+        _logger.i('Updated splashDuration to: $value');
+        notifyListeners();
+      } catch (e) {
+        _logger.e('Failed to save splashDuration: $e');
       }
     }
   }

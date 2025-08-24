@@ -40,7 +40,14 @@ class BaseScreen extends StatelessWidget {
             ),
             actions: actions,
           ),
-      drawer: showDrawer ? const AppDrawer() : null,
+      drawer: showDrawer
+          ? const AppDrawer(
+              onDisableAutoStartLiveData: null,
+              onEnableAutoStartLiveData: null,
+              onNavigateToRetrieveData: null,
+              onNavigateToSettings: null,
+            )
+          : null,
       body: child,
     );
   }

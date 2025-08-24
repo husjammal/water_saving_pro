@@ -139,7 +139,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context, connectionModel, child) {
         return Scaffold(
           backgroundColor: const Color(0xFFF5F7FA),
-          drawer: const AppDrawer(),
+          drawer: const AppDrawer(
+            onDisableAutoStartLiveData: null,
+            onEnableAutoStartLiveData: null,
+            onNavigateToRetrieveData: null,
+            onNavigateToSettings: null,
+          ),
           appBar: AppBar(
             title: const Text(
               'Settings',
@@ -914,6 +919,90 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       ),
                                     ],
                                   ),
+                                ),
+                                const SizedBox(height: 20),
+
+                                // Splash Duration Setting
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF3498DB)
+                                            .withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Icon(
+                                        Icons.timer,
+                                        color: Color(0xFF3498DB),
+                                        size: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Splash Screen Duration',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w600,
+                                              color: Color(0xFF2C3E50),
+                                            ),
+                                          ),
+                                          Text(
+                                            'Duration of animated logo display on startup',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Color(0xFF7F8C8D),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Slider(
+                                        value: settingsModel.splashDuration
+                                            .toDouble(),
+                                        min: 1.0,
+                                        max: 10.0,
+                                        divisions: 9,
+                                        activeColor: const Color(0xFF3498DB),
+                                        inactiveColor: const Color(0xFFE0E6ED),
+                                        onChanged: (value) {
+                                          settingsModel.updateSplashDuration(
+                                              value.toInt());
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF3498DB)
+                                            .withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                            color: const Color(0xFF3498DB)),
+                                      ),
+                                      child: Text(
+                                        '${settingsModel.splashDuration}s',
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF3498DB),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 12),
                                 Container(

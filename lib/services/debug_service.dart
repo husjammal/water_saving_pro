@@ -90,7 +90,7 @@ class DebugService {
 
   void logWaterFlow(double flowRate, {String? tag}) {
     if (!_isEnabled) return;
-    log('WATER: ${flowRate.toStringAsFixed(2)} L/s', tag: tag);
+    log('WATER: ${(flowRate * 60).toStringAsFixed(2)} L/min', tag: tag);
   }
 
   void logTapDuration(double duration, {String? tag}) {

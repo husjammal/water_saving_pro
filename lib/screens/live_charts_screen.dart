@@ -137,7 +137,12 @@ class _LiveChartsScreenState extends State<LiveChartsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
-      drawer: const AppDrawer(),
+      drawer: const AppDrawer(
+        onDisableAutoStartLiveData: null,
+        onEnableAutoStartLiveData: null,
+        onNavigateToRetrieveData: null,
+        onNavigateToSettings: null,
+      ),
       appBar: AppBar(
         title: const Text(
           'Live Charts',
@@ -199,7 +204,7 @@ class _LiveChartsScreenState extends State<LiveChartsScreen> {
                         ),
                         const SizedBox(width: 8),
                         const Text(
-                          'Water Flow Rate (L/s)',
+                          'Water Flow Rate (L/min)',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,

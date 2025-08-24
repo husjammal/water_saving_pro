@@ -110,7 +110,12 @@ class _RetrieveDataScreenState extends State<RetrieveDataScreen> {
       builder: (context, dataModel, child) {
         return Scaffold(
           backgroundColor: const Color(0xFFF5F7FA),
-          drawer: const AppDrawer(),
+          drawer: const AppDrawer(
+            onDisableAutoStartLiveData: null,
+            onEnableAutoStartLiveData: null,
+            onNavigateToRetrieveData: null,
+            onNavigateToSettings: null,
+          ),
           appBar: AppBar(
             title: const Text(
               'Retrieve Data',

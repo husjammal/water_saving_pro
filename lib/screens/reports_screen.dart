@@ -214,7 +214,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             (item['timestamp'] - data.first['timestamp']).toDouble(),
             item['tap_on_duration']));
       } else {
-        waterFlowSpots.add(FlSpot(i.toDouble(), item['water_flow_rate']));
+        waterFlowSpots.add(FlSpot(i.toDouble(), item['water_flow_rate'] * 60));
         batteryVoltageSpots.add(FlSpot(i.toDouble(), item['battery_voltage']));
         tapOnDurationSpots.add(FlSpot(i.toDouble(), item['tap_on_duration']));
       }
@@ -932,8 +932,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
       child: Column(
         children: [
           _buildSingleChart(
-            title: 'Water Flow Rate',
-            subtitle: 'Liters per second',
+            title: 'Water Flow Rate (L/min)',
+            subtitle: 'Liters per minute',
             spots: spots['water_flow']!,
             color: const Color(0xFF2196F3),
             data: data,
@@ -974,7 +974,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
       builder: (context, dataModel, child) {
         return Scaffold(
           backgroundColor: const Color(0xFFF5F7FA),
-          drawer: const AppDrawer(),
+          drawer: const AppDrawer(
+            onDisableAutoStartLiveData: null,
+            onEnableAutoStartLiveData: null,
+            onNavigateToRetrieveData: null,
+            onNavigateToSettings: null,
+          ),
           appBar: AppBar(
             title: const Text(
               'Reports',

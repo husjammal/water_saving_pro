@@ -9,7 +9,12 @@ class HelpScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
-      drawer: const AppDrawer(),
+      drawer: const AppDrawer(
+        onDisableAutoStartLiveData: null,
+        onEnableAutoStartLiveData: null,
+        onNavigateToRetrieveData: null,
+        onNavigateToSettings: null,
+      ),
       appBar: AppBar(
         title: const Text(
           'Help & Guide',
@@ -127,7 +132,7 @@ class HelpScreen extends StatelessWidget {
                   icon: Icons.cloud_download,
                   title: 'Data Retrieval',
                   description:
-                      'Download water usage data including flow rate, battery voltage, and tap duration from your device.',
+                      'Download water usage data including flow rate (L/min), battery voltage, and tap duration from your device.',
                 ),
                 _buildFeatureItem(
                   icon: Icons.show_chart,
@@ -227,9 +232,9 @@ class HelpScreen extends StatelessWidget {
               children: [
                 _buildFeatureItem(
                   icon: Icons.water_drop,
-                  title: 'Water Flow Rate',
+                  title: 'Water Flow Rate (L/min)',
                   description:
-                      'Real-time chart showing water consumption in liters per second with live updates.',
+                      'Real-time chart showing water consumption in liters per minute with live updates.',
                 ),
                 _buildFeatureItem(
                   icon: Icons.battery_full,
@@ -388,7 +393,7 @@ class HelpScreen extends StatelessWidget {
                   icon: Icons.water_drop,
                   title: 'Water Calculation Settings',
                   description:
-                      'Configure maximum flow rate and water unit price for savings calculations.',
+                      'Configure maximum flow rate (L/s) and water unit price for savings calculations.',
                 ),
                 _buildFeatureItem(
                   icon: Icons.bug_report,

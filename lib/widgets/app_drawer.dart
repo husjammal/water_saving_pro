@@ -4,9 +4,22 @@ import '../models/connection_state_model.dart';
 import '../models/data_state_model.dart';
 import '../services/navigation_service.dart';
 import '../screens/splash_screen.dart';
+import '../screens/help_screen.dart';
+import '../screens/home_screen.dart';
 
 class AppDrawer extends StatelessWidget {
-  const AppDrawer({super.key});
+  final VoidCallback? onDisableAutoStartLiveData;
+  final VoidCallback? onEnableAutoStartLiveData;
+  final VoidCallback? onNavigateToRetrieveData;
+  final VoidCallback? onNavigateToSettings;
+
+  const AppDrawer({
+    super.key,
+    this.onDisableAutoStartLiveData,
+    this.onEnableAutoStartLiveData,
+    this.onNavigateToRetrieveData,
+    this.onNavigateToSettings,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -180,7 +193,18 @@ class AppDrawer extends StatelessWidget {
                                 subtitle: 'Main control panel',
                                 onTap: () {
                                   Navigator.pop(context); // Close drawer
-                                  NavigationService().navigateToHome(context);
+                                  NavigationService()
+                                      .updateCurrentScreen('home');
+                                  Navigator.pushAndRemoveUntil(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => const HomeScreen(),
+                                      settings:
+                                          const RouteSettings(name: 'home'),
+                                    ),
+                                    (route) =>
+                                        false, // Remove all previous routes
+                                  );
                                 },
                                 isSelected:
                                     NavigationService().isCurrentScreen('home'),
@@ -193,8 +217,12 @@ class AppDrawer extends StatelessWidget {
                                 subtitle: 'Real-time data visualization',
                                 onTap: () {
                                   Navigator.pop(context); // Close drawer
+                                  // Use the same pattern as dashboard buttons
+                                  onDisableAutoStartLiveData?.call();
                                   NavigationService().navigateToLiveCharts(
-                                      context, connectionModel);
+                                    context,
+                                    connectionModel,
+                                  );
                                 },
                                 isSelected: NavigationService()
                                     .isCurrentScreen('live_charts'),
@@ -207,6 +235,8 @@ class AppDrawer extends StatelessWidget {
                                 subtitle: 'Data analysis and reports',
                                 onTap: () {
                                   Navigator.pop(context); // Close drawer
+                                  // Use the same pattern as dashboard buttons
+                                  onDisableAutoStartLiveData?.call();
                                   NavigationService()
                                       .navigateToReports(context);
                                 },
@@ -221,33 +251,7 @@ class AppDrawer extends StatelessWidget {
                                 subtitle: 'Download and manage data',
                                 onTap: () {
                                   Navigator.pop(context); // Close drawer
-                                  // For RetrieveDataScreen, we need to get the callbacks from the current context
-                                  // This will be handled by the home screen navigation
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => RetrieveDataScreen(
-                                        onRetrieveData: () async {
-                                          // This will be overridden by the actual implementation
-                                        },
-                                        onRetrieveAllData: () async {
-                                          // This will be overridden by the actual implementation
-                                        },
-                                        onSetManualTimestamp: (context) async {
-                                          // This will be overridden by the actual implementation
-                                        },
-                                        onClearCsvData: () async {
-                                          // This will be overridden by the actual implementation
-                                        },
-                                        onCleanCsvData: (context) async {
-                                          return {
-                                            'success': false,
-                                            'message': 'Not implemented'
-                                          };
-                                        },
-                                      ),
-                                    ),
-                                  );
+                                  onNavigateToRetrieveData?.call();
                                 },
                                 isSelected: NavigationService()
                                     .isCurrentScreen('retrieve_data'),
@@ -260,28 +264,7 @@ class AppDrawer extends StatelessWidget {
                                 subtitle: 'App configuration',
                                 onTap: () {
                                   Navigator.pop(context); // Close drawer
-                                  // For SettingsScreen, we need to get the callbacks from the current context
-                                  // This will be handled by the home screen navigation
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => SettingsScreen(
-                                        utcOffset: '+3',
-                                        onDisconnectDevice: () {
-                                          // This will be overridden by the actual implementation
-                                        },
-                                        onSyncTime: () async {
-                                          // This will be overridden by the actual implementation
-                                        },
-                                        onReadDeviceTime: () async {
-                                          // This will be overridden by the actual implementation
-                                        },
-                                        onUpdateUtcOffset: (value) {
-                                          // This will be overridden by the actual implementation
-                                        },
-                                      ),
-                                    ),
-                                  );
+                                  onNavigateToSettings?.call();
                                 },
                                 isSelected: NavigationService()
                                     .isCurrentScreen('settings'),
