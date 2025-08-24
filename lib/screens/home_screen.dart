@@ -794,7 +794,6 @@ class _HomeScreenState extends State<HomeScreen>
     routeObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     _unsubscribeFromLiveData();
-    _stopLiveData(); // Stop live data when leaving HomeScreen
     _soundService.dispose(); // Dispose sound service
     // Example: If you need to disconnect device on dispose, use _connectionModel
     // _connectionModel?.disconnectDevice();
