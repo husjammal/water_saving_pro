@@ -151,9 +151,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: 20,
+                color: Colors.white,
               ),
             ),
             backgroundColor: const Color(0xFF1E5979),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.exit_to_app, color: Colors.white),
+                tooltip: 'Exit',
+                onPressed: () {
+                  Navigator.maybePop(context);
+                },
+              ),
+            ],
             elevation: 0,
             centerTitle: true,
             shape: const RoundedRectangleBorder(

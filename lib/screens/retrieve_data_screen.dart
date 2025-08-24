@@ -122,8 +122,18 @@ class _RetrieveDataScreenState extends State<RetrieveDataScreen> {
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: 20,
+                color: Colors.white,
               ),
             ),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.exit_to_app, color: Colors.white),
+                tooltip: 'Exit',
+                onPressed: () {
+                  Navigator.maybePop(context);
+                },
+              ),
+            ],
             backgroundColor: const Color(0xFF1E5979),
             elevation: 0,
             centerTitle: true,
