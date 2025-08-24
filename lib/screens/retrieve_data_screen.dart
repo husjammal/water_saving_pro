@@ -124,6 +124,10 @@ class _RetrieveDataScreenState extends State<RetrieveDataScreen> {
                 fontSize: 20,
               ),
             ),
+            leading: BackButton(
+              onPressed: () => Navigator.maybePop(context),
+            ),
+            automaticallyImplyLeading: false,
             backgroundColor: const Color(0xFF1E5979),
             elevation: 0,
             centerTitle: true,

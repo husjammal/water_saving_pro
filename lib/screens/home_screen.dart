@@ -1082,6 +1082,15 @@ class _HomeScreenState extends State<HomeScreen>
                       onPressed: () => Scaffold.of(context).openDrawer(),
                     ),
                   ),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.exit_to_app, color: Colors.white),
+                      tooltip: 'Exit',
+                      onPressed: () {
+                        Navigator.maybePop(context);
+                      },
+                    ),
+                  ],
                   flexibleSpace: FlexibleSpaceBar(
                     background: Container(
                       decoration: const BoxDecoration(
