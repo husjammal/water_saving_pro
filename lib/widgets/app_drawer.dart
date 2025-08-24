@@ -3,12 +3,6 @@ import 'package:provider/provider.dart';
 import '../models/connection_state_model.dart';
 import '../models/data_state_model.dart';
 import '../services/navigation_service.dart';
-import '../screens/home_screen.dart';
-import '../screens/reports_screen.dart';
-import '../screens/live_charts_screen.dart';
-import '../screens/retrieve_data_screen.dart';
-import '../screens/settings_screen.dart';
-import '../screens/help_screen.dart';
 import '../screens/splash_screen.dart';
 
 class AppDrawer extends StatelessWidget {
