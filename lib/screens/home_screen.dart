@@ -794,7 +794,7 @@ class _HomeScreenState extends State<HomeScreen>
     routeObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     _unsubscribeFromLiveData();
-    _stopLiveData(); // Stop live data when leaving HomeScreen
+    // _stopLiveData(); // Stop live data when leaving HomeScreen
     _soundService.dispose(); // Dispose sound service
     // Example: If you need to disconnect device on dispose, use _connectionModel
     // _connectionModel?.disconnectDevice();
@@ -837,7 +837,7 @@ class _HomeScreenState extends State<HomeScreen>
       // First, ensure we're unsubscribed to avoid duplicate subscriptions
       _unsubscribeFromLiveData();
       // Add a small delay to ensure previous commands are processed
-      Future.delayed(const Duration(milliseconds: 500), () {
+      Future.delayed(const Duration(milliseconds: 50), () {
         if (mounted) {
           _startLiveDataIfConnected();
           // Ensure subscription is established
